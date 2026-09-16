@@ -75,7 +75,3 @@ requirements.txt
 - Works best with high-contrast images (clear subject against a light background) since it relies on brightness thresholding rather than edge detection.
 - Contours from OpenCV aren't always perfectly ordered closed loops, so fills on complex/self-intersecting shapes may occasionally look slightly imperfect — this is a limitation of pixel-contour tracing, not a bug.
 - If `IMAGE_SOURCE` is a URL, make sure the link points directly to an image file (not an HTML page); the loader checks the response's Content-Type and will error clearly if it doesn't look like an image.
-
-## License
-
-MIT (or your license of choice)
