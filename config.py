@@ -36,6 +36,18 @@ def _get_float(key: str, default: float) -> float:
         return default
 
 
+def _get_auto_int(key: str):
+    """Return an int, or None when the value is empty or 'auto'."""
+    val = os.getenv(key)
+    if val is None or val.strip().lower() in ("", "auto"):
+        return None
+    try:
+        return int(val)
+    except ValueError:
+        print(f"Warning: {key}='{val}' is not a valid integer, using auto.")
+        return None
+
+
 def _get_str(key: str, default: str) -> str:
     val = os.getenv(key)
     if val is None or val.strip() == "":
@@ -47,7 +59,7 @@ def _get_str(key: str, default: str) -> str:
 class Settings:
     image_source: str
     target_height: int
-    threshold: int
+    threshold: int | None   # None means pick automatically
     min_contour_area: float
     draw_scale: float
     window_width: int
@@ -59,6 +71,13 @@ class Settings:
     pen_color: str
     save_output_path: str
     auto_close_after_seconds: int
+    speed: str
+    mode: str
+    colors: int
+
+
+SPEED_CHOICES = ("ask", "slow", "normal", "fast", "instant", "custom")
+MODE_CHOICES = ("auto", "silhouette", "lineart", "color", "comic")
 
 
 def load_settings() -> Settings:
@@ -67,7 +86,7 @@ def load_settings() -> Settings:
     settings = Settings(
         image_source=image_source,
         target_height=_get_int("TARGET_HEIGHT", 700),
-        threshold=_get_int("THRESHOLD", 180),
+        threshold=_get_auto_int("THRESHOLD"),
         min_contour_area=_get_float("MIN_CONTOUR_AREA", 15),
         draw_scale=_get_float("DRAW_SCALE", 0.8),
         window_width=_get_int("WINDOW_WIDTH", 800),
@@ -79,7 +98,23 @@ def load_settings() -> Settings:
         pen_color=_get_str("PEN_COLOR", "black"),
         save_output_path=_get_str("SAVE_OUTPUT_PATH", ""),
         auto_close_after_seconds=_get_int("AUTO_CLOSE_AFTER_SECONDS", 0),
+        speed=_get_str("SPEED", "ask").lower(),
+        mode=_get_str("MODE", "auto").lower(),
+        colors=_get_int("COLORS", 12),
     )
+
+    if settings.mode not in MODE_CHOICES:
+        print(f"Warning: MODE='{settings.mode}' is not one of {', '.join(MODE_CHOICES)}, using auto.")
+        settings.mode = "auto"
+    if not 2 <= settings.colors <= 32:
+        print(f"Warning: COLORS={settings.colors} must be between 2 and 32, using 12.")
+        settings.colors = 12
+
+    if settings.speed not in SPEED_CHOICES:
+        print(f"Warning: SPEED='{settings.speed}' is not one of {', '.join(SPEED_CHOICES)}, asking instead.")
+        settings.speed = "ask"
+    if settings.speed == "ask" and settings.auto_close_after_seconds > 0:
+        settings.speed = "custom"  # unattended runs shouldn't wait for a click
 
     if not settings.image_source:
         print(
@@ -89,7 +124,7 @@ def load_settings() -> Settings:
         )
         sys.exit(1)
 
-    if not (0 <= settings.threshold <= 255):
+    if settings.threshold is not None and not (0 <= settings.threshold <= 255):
         print(f"Warning: THRESHOLD={settings.threshold} out of range 0-255, clamping.")
         settings.threshold = max(0, min(255, settings.threshold))
 
