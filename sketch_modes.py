@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-MODES = ("auto", "silhouette", "lineart", "color", "comic", "sketch")
+MODES = ("auto", "sketch", "silhouette", "lineart", "color", "comic")
 PALETTES = ("original", "grayscale", "bw")
 DETAILS = {
     #          colors, smallest region kept (px), smoothing strength, outline simplification
@@ -116,11 +116,33 @@ def silhouette(img, threshold=None, min_area=15, palette="original", pen_color="
     return [Stroke("fill", c.reshape(-1, 2), color) for c in contours]
 
 
+def edge_thresholds(gray):
+    """Canny cutoffs from how strong this image's edges actually are.
+
+    Basing them on brightness instead (a common rule of thumb) sets them far too high on light
+    images such as pencil drawings, so their soft lines are lost.
+    """
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1)
+    magnitude = cv2.magnitude(gx, gy)
+    strong = magnitude[magnitude > 4]
+    if strong.size == 0:
+        return 20, 60
+    high = float(np.clip(np.percentile(strong, 75), 30, 255))
+    return int(high * 0.4), int(high)
+
+
+def is_light_page(img) -> bool:
+    """A drawing on light paper: bright, nearly colorless edges."""
+    gray = _gray(img)
+    border = np.concatenate([gray[0], gray[-1], gray[:, 0], gray[:, -1]])
+    return float(border.mean()) > 150 and is_colorless(img)
+
+
 def lineart(img, palette="original", pen_color="black", darken=0.55):
     """Edges as pen lines. In the original palette, each line takes a darker shade of the colors under it."""
     gray = cv2.bilateralFilter(_gray(img), 9, 60, 60)
-    median = float(np.median(gray))
-    low, high = max(20, int(0.66 * median)), max(60, int(min(255, 1.33 * median)))
+    low, high = edge_thresholds(gray)
     edges = cv2.dilate(cv2.Canny(gray, low, high), np.ones((2, 2), np.uint8))
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
     lines = [cv2.approxPolyDP(c, 1.0, False) for c in contours if cv2.arcLength(c, False) > MIN_LINE_LENGTH]
@@ -218,12 +240,32 @@ def color_regions(img, detail="high", palette="original", colors=None):
     preset = DETAILS[detail]
     k = 2 if palette == "bw" else (colors or preset["colors"])
     source = cv2.cvtColor(_gray(img), cv2.COLOR_GRAY2BGR) if palette in ("grayscale", "bw") else img
-    smooth = cv2.bilateralFilter(source, 7, preset["smooth"], preset["smooth"])
+    light_page = is_light_page(img)
+    strength = 10 if light_page else preset["smooth"]   # pencil lines are thin; heavy smoothing erases them
+    smooth = cv2.bilateralFilter(source, 7, strength, strength)
     lab = cv2.cvtColor(smooth, cv2.COLOR_BGR2LAB).reshape(-1, 3).astype(np.float32)
+    h, w = img.shape[:2]
+
+    # On a light page, the paper is left blank (the canvas shows through) and every color is
+    # spent on the drawing itself, instead of on shades of paper.
+    paper = None
+    if light_page:
+        gray = _gray(smooth)
+        paper = (gray >= np.median(gray) - 25).reshape(-1)
+        if paper.all():
+            return []
+
     cv2.setRNGSeed(0)  # same image, same result
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
-    _, labels, centers = cv2.kmeans(lab, k, None, criteria, 3, cv2.KMEANS_PP_CENTERS)
-    labels = labels.reshape(img.shape[:2])
+    samples = lab if paper is None else lab[~paper]
+    k = max(1, min(k, len(samples)))
+    _, sample_labels, centers = cv2.kmeans(samples, k, None, criteria, 3, cv2.KMEANS_PP_CENTERS)
+    if paper is None:
+        labels = sample_labels.reshape(h, w)
+    else:
+        labels = np.full(h * w, -1, np.int32)
+        labels[~paper] = sample_labels.ravel()
+        labels = labels.reshape(h, w)
     centers_bgr = cv2.cvtColor(centers.reshape(1, -1, 3).astype(np.uint8), cv2.COLOR_LAB2BGR)[0]
 
     if palette == "bw":
@@ -233,23 +275,29 @@ def color_regions(img, detail="high", palette="original", colors=None):
         names = [_hex(c) for c in centers_bgr]
 
     # A base layer in the most common color, so tiny gaps between regions never show as white.
-    h, w = img.shape[:2]
-    common = int(np.bincount(labels.ravel(), minlength=k).argmax())
-    base = Stroke("fill", np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]), names[common])
+    # Not on a light page, where the blank canvas is the paper.
+    common, base = -1, []
+    if paper is None:
+        common = int(np.bincount(labels.ravel(), minlength=k).argmax())
+        base = [Stroke("fill", np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]), names[common])]
 
     strokes = []
     kernel = np.ones((2, 2), np.uint8)
+    # On a light page the marks are thin pencil lines, so keep small shapes instead of cleaning them away.
+    min_area = 3 if paper is not None else preset["min_area"]
     for i in range(k):
         if i == common:
             continue
-        mask = cv2.morphologyEx((labels == i).astype(np.uint8) * 255, cv2.MORPH_OPEN, kernel)
+        mask = (labels == i).astype(np.uint8) * 255
+        if paper is None:
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         contours, _ = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
         for c in contours:
-            if cv2.contourArea(c) > preset["min_area"]:
+            if cv2.contourArea(c) > min_area:
                 strokes.append(Stroke("fill", cv2.approxPolyDP(c, preset["epsilon"], True).reshape(-1, 2), names[i]))
     # Big regions first, so smaller details are painted on top of them.
     strokes.sort(key=lambda s: _area(s.points), reverse=True)
-    return [base] + strokes
+    return base + strokes
 
 
 def build_strokes(img, mode="auto", palette="original", detail="high", threshold=None, colors=None,

@@ -43,11 +43,11 @@ Pick these in the setup window, or set `MODE`, `PALETTE` and `DETAIL` in `.env`.
 
 | Mode | What it draws | Best for |
 |---|---|---|
+| `sketch` | A pencil scribble: the pen visits every dark pixel, always hopping to the nearest one next | Pencil drawings and black-and-white photos |
 | `silhouette` | Solid filled shapes from one brightness cutoff, picked automatically | Silhouettes and logos, on light or dark backgrounds |
 | `lineart` | The image's edges as pen lines, like a sketch | Outlines and drawings |
 | `color` | The image reduced to a few flat colors, each region filled in its color | Posters, landscapes and photos |
 | `comic` | Flat colors with line art drawn on top | Anime, cartoons and illustrations |
-| `sketch` | A pencil scribble: the pen visits every dark pixel, always hopping to the nearest one next | Pencil drawings and black-and-white photos |
 
 - **Colors:** `original` keeps the image's own colors, including tinted line art. `grayscale` draws in shades of gray, and `bw` in pure black and white.
 - **Detail:** `low` (8 colors), `medium` (14) or `high` (24, the default). Higher detail looks closer to the original but draws more strokes. A detailed anime illustration in comic style at high detail is about 1,900 strokes, which takes about 30 seconds at **Fast**.

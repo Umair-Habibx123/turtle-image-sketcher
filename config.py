@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()  # reads the .env file next to this project
 
 SPEED_CHOICES = ("slow", "normal", "fast", "instant", "custom")
-MODE_CHOICES = ("auto", "silhouette", "lineart", "color", "comic", "sketch")
+MODE_CHOICES = ("auto", "sketch", "silhouette", "lineart", "color", "comic")
 PALETTE_CHOICES = ("original", "grayscale", "bw")
 DETAIL_CHOICES = ("low", "medium", "high")
 WINDOW_FRACTION = 0.85  # default window size, as a share of the screen

@@ -37,8 +37,8 @@ RESIZE_CHECK_EVERY = 150  # points; how often a long stroke checks whether the w
 SPEED_KEYS = {"1": "slow", "2": "normal", "3": "fast", "4": "instant"}
 
 # Labels for the setup window: setting value -> what the user sees
-MODE_LABELS = {"auto": "Auto", "silhouette": "Silhouette", "lineart": "Line art", "color": "Color", "comic": "Comic",
-               "sketch": "Sketch"}
+MODE_LABELS = {"auto": "Auto", "sketch": "Sketch", "silhouette": "Silhouette", "lineart": "Line art",
+               "color": "Color", "comic": "Comic"}
 PALETTE_LABELS = {"original": "Original colors", "grayscale": "Grayscale", "bw": "Black & white"}
 DETAIL_LABELS = {"low": "Low", "medium": "Medium", "high": "High"}
 
