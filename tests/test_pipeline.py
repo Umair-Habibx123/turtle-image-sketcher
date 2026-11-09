@@ -35,7 +35,7 @@ def test_sample_silhouette_is_chosen_and_keeps_one_shape():
     strokes, width, height, mode = main.preprocess_image(load_image(SAMPLE))
     assert mode == "silhouette"
     assert strokes and all(s.kind == "fill" for s in strokes)
-    assert height == config.settings.target_height and width > 0
+    assert 0 < height <= config.settings.target_height + 24 and width > 0   # cropped to the drawing, plus a margin
 
 
 def test_colorful_image_gets_comic_mode_with_colors_and_lines():
@@ -66,15 +66,38 @@ def test_unknown_mode_is_rejected():
         sketch_modes.build_strokes(colorful_scene(), "watercolor")
 
 
-def test_drawing_is_scaled_to_fit_the_window():
-    scale = main.fit_scale(3000, 700)
-    assert scale <= config.settings.draw_scale
-    assert 3000 * scale <= config.settings.window_width
+def test_drawing_grows_and_shrinks_with_the_window():
+    small = main.fit_scale(1200, 700, 800, 600)
+    large = main.fit_scale(1200, 700, 1900, 1000)
+    assert large > small                      # maximizing makes the drawing bigger
+    assert 1200 * small <= 800                # and it always fits the width
+    assert 700 * large <= 1000 - main.STATUS_BAR
+
+
+def test_palettes_change_the_colors():
+    scene = colorful_scene()
+    gray, _ = sketch_modes.build_strokes(scene, "color", palette="grayscale")
+    assert all(s.color[1:3] == s.color[3:5] == s.color[5:7] for s in gray)    # r == g == b
+    bw, _ = sketch_modes.build_strokes(scene, "comic", palette="bw")
+    assert {s.color for s in bw} <= {"#000000", "#ffffff"}
+    original, _ = sketch_modes.build_strokes(scene, "color", palette="original")
+    assert len({s.color for s in original}) > len({s.color for s in gray if s.color != gray[0].color}) - 1
+
+
+def test_higher_detail_keeps_more_colors_and_starts_with_a_base_layer():
+    scene = colorful_scene()
+    low = sketch_modes.color_regions(scene, "low")
+    high = sketch_modes.color_regions(scene, "high")
+    assert len(high) >= len(low)
+    h, w = scene.shape[:2]
+    assert low[0].kind == "fill" and abs(sketch_modes._area(low[0].points) - (w - 1) * (h - 1)) < 1
 
 
 def test_image_center_maps_to_turtle_origin():
     to_turtle = main.build_point_mapper(400, 700, scale=1.0)
     assert to_turtle(200, 350) == (0, 0)
+    shifted = main.build_point_mapper(400, 700, scale=1.0, offset_y=20)
+    assert shifted(200, 350) == (0, -20)     # moved down to leave room for the status bar
     x, y = to_turtle(0, 0)
     assert x < 0 and y > 0
 
@@ -90,21 +113,27 @@ def test_empty_source_gives_a_clear_error():
 
 
 def test_speed_presets_get_faster_and_keys_cover_them():
-    refresh = [main.speed_values(name)[2] for name in ("slow", "normal", "fast", "instant")]
-    assert refresh == sorted(refresh)
+    per_frame = [main.speed_values(name)[1] for name in ("slow", "normal", "fast", "instant")]
+    pauses = [main.speed_values(name)[2] for name in ("slow", "normal", "fast", "instant")]
+    assert per_frame == sorted(per_frame) and pauses == sorted(pauses, reverse=True)
     assert set(main.SPEED_KEYS.values()) == set(main.SPEED_PRESETS)
+    assert set(main.PALETTE_LABELS) == set(sketch_modes.PALETTES)
+    assert set(main.DETAIL_LABELS) == set(sketch_modes.DETAILS)
 
 
 def test_settings_fall_back_safely(monkeypatch):
     monkeypatch.setenv("SPEED", "warp")
     monkeypatch.setenv("MODE", "watercolor")
+    monkeypatch.setenv("PALETTE", "sepia")
     monkeypatch.setenv("THRESHOLD", "auto")
+    monkeypatch.setenv("DRAW_SCALE", "7")
     monkeypatch.setenv("AUTO_CLOSE_AFTER_SECONDS", "0")
     s = config.load_settings()
-    assert (s.speed, s.mode, s.threshold) == ("ask", "auto", None)
-    monkeypatch.setenv("SPEED", "ask")
+    assert (s.speed, s.mode, s.palette, s.threshold, s.draw_scale) == ("normal", "auto", "original", None, 0.95)
+    monkeypatch.setenv("SPEED", "ask")                 # older .env files
+    assert config.load_settings().show_setup is True
     monkeypatch.setenv("AUTO_CLOSE_AFTER_SECONDS", "5")
-    assert config.load_settings().speed == "custom"  # unattended runs don't wait for a click
+    assert config.load_settings().show_setup is False  # unattended runs don't wait for a click
 
 
 def test_invalid_numbers_fall_back_to_defaults(monkeypatch):
@@ -112,3 +141,48 @@ def test_invalid_numbers_fall_back_to_defaults(monkeypatch):
     assert config._get_int("TARGET_HEIGHT", 700) == 700
     monkeypatch.setenv("DRAW_SCALE", "")
     assert config._get_float("DRAW_SCALE", 0.8) == 0.8
+
+
+def pencil_drawing():
+    """A light, colorless image with soft gray pencil-like strokes on a gray gradient."""
+    img = np.tile(np.linspace(215, 235, 300, dtype=np.uint8), (200, 1))
+    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    cv2.circle(img, (150, 100), 50, (110, 110, 110), 3)
+    cv2.line(img, (60, 170), (240, 170), (130, 130, 130), 2)
+    return img
+
+
+def test_pencil_drawings_get_the_sketch_style():
+    strokes, mode = sketch_modes.build_strokes(pencil_drawing(), "auto")
+    assert mode == "sketch"
+    assert strokes and all(s.kind == "line" and s.color == sketch_modes.PENCIL for s in strokes)
+
+
+def test_nearest_path_visits_every_point_and_lifts_the_pen_for_long_jumps():
+    near = np.array([[0, 0], [1, 0], [2, 0], [3, 1]])
+    far = np.array([[100, 100], [101, 100], [102, 101]])
+    points = np.vstack([near, far])
+    runs = sketch_modes.nearest_path(points, max_jump=5)
+    assert sum(len(r) for r in runs) == len(points)
+    assert len(runs) == 2                                # one pen lift between the two groups
+    assert sketch_modes.nearest_path(np.empty((0, 2), int), 5) == []
+
+
+def test_more_sketch_detail_keeps_more_pencil_marks():
+    gray = cv2.cvtColor(pencil_drawing(), cv2.COLOR_BGR2GRAY)
+    assert len(sketch_modes.dark_pixels(gray, "high")) >= len(sketch_modes.dark_pixels(gray, "low"))
+
+
+def test_small_drawings_on_a_plain_page_are_cropped_to_the_subject():
+    page = np.full((400, 300, 3), 230, np.uint8)
+    cv2.circle(page, (150, 200), 30, (120, 120, 120), 3)           # a small sketch in the middle of the page
+    cropped = main.crop_to_subject(page)
+    assert cropped.shape[0] < 120 and cropped.shape[1] < 120        # the empty page around it is gone
+    strokes, width, height, _ = main.preprocess_image(page, mode="sketch")
+    points = np.vstack([s.points for s in strokes])
+    assert points.min() >= 0 and points[:, 0].max() <= width and points[:, 1].max() <= height
+
+
+def test_full_frame_pictures_are_not_cropped():
+    scene = colorful_scene()                                          # dark background, fills the frame
+    assert main.crop_to_subject(scene).shape == scene.shape
